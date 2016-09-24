@@ -1,11 +1,18 @@
 package bootkube
 
 import (
+	"crypto/tls"
 	"fmt"
+	"net"
+	"net/http"
 	"net/url"
 	"path/filepath"
 	"time"
 
+	etcd "github.com/coreos/etcd/etcdserver"
+	etcdhttp "github.com/coreos/etcd/etcdserver/api/v2http"
+	etcdtransport "github.com/coreos/etcd/pkg/transport"
+	etcdtypes "github.com/coreos/etcd/pkg/types"
 	"github.com/spf13/pflag"
 	apiapp "k8s.io/kubernetes/cmd/kube-apiserver/app"
 	apiserver "k8s.io/kubernetes/cmd/kube-apiserver/app/options"
@@ -39,11 +46,16 @@ var requiredPods = []string{
 }
 
 type Config struct {
-	AssetDir   string
-	EtcdServer *url.URL
+	AssetDir      string
+	EtcdDataDir   string
+	EtcdName      string
+	EtcdClientURL *url.URL
+	EtcdPeerURL   *url.URL
 }
 
 type bootkube struct {
+	etcd       *etcd.EtcdServer
+	etcdConfig *etcd.ServerConfig
 	assetDir   string
 	apiServer  *apiserver.APIServer
 	controller *controller.CMServer
@@ -51,6 +63,41 @@ type bootkube struct {
 }
 
 func NewBootkube(config Config) (*bootkube, error) {
+	etcdClientURLs, err := etcdtypes.NewURLs([]string{config.EtcdClientURL.String()})
+	if err != nil {
+		return nil, err
+	}
+
+	etcdPeerURLs, err := etcdtypes.NewURLs([]string{config.EtcdPeerURL.String()})
+	if err != nil {
+		return nil, err
+	}
+
+	peersMap := map[string]etcdtypes.URLs{
+		config.EtcdName: etcdPeerURLs,
+	}
+
+	etcdConfig := &etcd.ServerConfig{
+		Name:               config.EtcdName,
+		ClientURLs:         etcdClientURLs,
+		PeerURLs:           etcdPeerURLs,
+		DataDir:            config.EtcdDataDir,
+		InitialPeerURLsMap: peersMap,
+
+		NewCluster: true,
+
+		SnapCount:     etcd.DefaultSnapCount,
+		MaxSnapFiles:  5,
+		MaxWALFiles:   5,
+		TickMs:        100,
+		ElectionTicks: 10,
+	}
+
+	etcdServer, err := etcd.NewServer(etcdConfig)
+	if err != nil {
+		return nil, fmt.Errorf("etcd config error: %v", err)
+	}
+
 	apiServer := apiserver.NewAPIServer()
 	fs := pflag.NewFlagSet("apiserver", pflag.ExitOnError)
 	apiServer.AddFlags(fs)
@@ -62,7 +109,7 @@ func NewBootkube(config Config) (*bootkube, error) {
 		"--tls-private-key-file=" + filepath.Join(config.AssetDir, asset.AssetPathAPIServerKey),
 		"--tls-cert-file=" + filepath.Join(config.AssetDir, asset.AssetPathAPIServerCert),
 		"--client-ca-file=" + filepath.Join(config.AssetDir, asset.AssetPathCACert),
-		"--etcd-servers=" + config.EtcdServer.String(),
+		"--etcd-servers=http://127.0.0.1:4500", //+ config.EtcdClientURL.String(),
 		"--service-cluster-ip-range=10.3.0.0/24",
 		"--service-account-key-file=" + filepath.Join(config.AssetDir, asset.AssetPathServiceAccountPubKey),
 		"--admission-control=ServiceAccount",
@@ -88,6 +135,8 @@ func NewBootkube(config Config) (*bootkube, error) {
 	})
 
 	return &bootkube{
+		etcdConfig: etcdConfig,
+		etcd:       etcdServer,
 		apiServer:  apiServer,
 		controller: cmServer,
 		scheduler:  schedServer,
@@ -97,6 +146,24 @@ func NewBootkube(config Config) (*bootkube, error) {
 
 func (b *bootkube) Run() error {
 	UserOutput("Running temporary bootstrap control plane...\n")
+
+	listeners := createListenersOrPanic(b.etcdConfig.ClientURLs)
+	b.etcd.Start()
+
+	// setup client listeners
+	timeout := etcdRequestTimeout(b.etcdConfig.ElectionTicks, b.etcdConfig.TickMs)
+	ch := etcdhttp.NewClientHandler(b.etcd, timeout)
+	for _, l := range listeners {
+		go func(l net.Listener) {
+			srv := &http.Server{
+				Handler:     ch,
+				ReadTimeout: 5 * time.Minute,
+			}
+			panic(srv.Serve(l))
+		}(l)
+	}
+
+	time.Sleep(2 * time.Second)
 
 	errch := make(chan error)
 	go func() { errch <- apiapp.Run(b.apiServer) }()
@@ -123,4 +190,27 @@ func (b *bootkube) Run() error {
 // should go to stderr.
 func UserOutput(format string, a ...interface{}) {
 	fmt.Printf(format, a...)
+}
+
+// createListenersOrPanic either creates a TCP listener with the provided URLs or panics.
+func createListenersOrPanic(urls etcdtypes.URLs) (listeners []net.Listener) {
+	for _, url := range urls {
+		l, err := net.Listen("tcp", url.Host)
+		if err != nil {
+			panic(err)
+		}
+
+		l, err = etcdtransport.NewKeepAliveListener(l, url.Scheme, &tls.Config{})
+		if err != nil {
+			panic(err)
+		}
+
+		listeners = append(listeners, l)
+	}
+	return listeners
+}
+
+// etcdRequestTimeout calculates the correct timeout using a method from from github.com/coreos/etcd/etcdserver/config.go
+func etcdRequestTimeout(electionTicks int, tickMs uint) time.Duration {
+	return 5*time.Second + 2*time.Duration(electionTicks)*time.Duration(tickMs)*time.Millisecond
 }
