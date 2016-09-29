@@ -392,6 +392,7 @@ metadata:
   labels:
     app: etcd
     etcd_node: etcd0
+    k8s-app: kube-etcd
   name: etcd0
   namespace: kube-system
 spec:
@@ -401,6 +402,7 @@ spec:
       labels:
         app: etcd
         etcd_node: etcd0
+        k8s-app: kube-etcd
     spec:
       hostNetwork: true
       containers:

@@ -45,6 +45,7 @@ var requiredPods = []string{
 	"kube-apiserver",
 	"kube-scheduler",
 	"kube-controller-manager",
+	"etcd0",
 }
 
 type Config struct {
