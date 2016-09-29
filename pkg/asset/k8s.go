@@ -24,6 +24,7 @@ func newStaticAssets() Assets {
 		mustCreateAssetFromTemplate(AssetPathScheduler, internal.SchedulerTemplate, noData),
 		mustCreateAssetFromTemplate(AssetPathKubeDNSDeployment, internal.DNSDeploymentTemplate, noData),
 		mustCreateAssetFromTemplate(AssetPathKubeDNSSvc, internal.DNSSvcTemplate, noData),
+		mustCreateAssetFromTemplate(AssetPathEtcdDeployment, internal.EtcdDeploymentTemplate, noData),
 		mustCreateAssetFromTemplate(AssetPathSystemNamespace, internal.SystemNSTemplate, noData),
 	}
 }

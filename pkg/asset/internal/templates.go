@@ -124,6 +124,7 @@ spec:
         k8s-app: kube-apiserver
         version: v1.3.7_coreos.0
     spec:
+      restartPolicy: Always
       nodeSelector:
         master: "true"
       hostNetwork: true
@@ -384,6 +385,39 @@ spec:
   - name: dns-tcp
     port: 53
     protocol: TCP
+`)
+	EtcdDeploymentTemplate = []byte(`apiVersion: "extensions/v1beta1"
+kind: Deployment
+metadata:
+  labels:
+    app: etcd
+    etcd_node: etcd0
+  name: etcd0
+  namespace: kube-system
+spec:
+  replicas: 1
+  template:
+    metadata:
+      labels:
+        app: etcd
+        etcd_node: etcd0
+    spec:
+      hostNetwork: true
+      containers:
+      - command:
+        - /bin/sh
+        - -c
+        - etcdctl --endpoints http://127.0.0.1:6040 member add etcd0 http://127.0.0.1:6051 || sleep 2 && /usr/local/bin/etcd --name etcd0 --initial-advertise-peer-urls http://127.0.0.1:6051 --listen-peer-urls http://127.0.0.1:6051 --listen-client-urls http://127.0.0.1:6050 --advertise-client-urls http://127.0.0.1:6050 --initial-cluster bootkube-0000=http://127.0.0.1:6000,bootkube-0001=http://127.0.0.1:6001,etcd0=http://127.0.0.1:6051 --initial-cluster-state existing --initial-cluster-token bootkube-etcd
+        image: quay.io/coreos/etcd:latest
+        name: etcd0
+        ports:
+        - containerPort: 6000
+          name: client
+          protocol: TCP
+        - containerPort: 6001
+          name: server
+          protocol: TCP
+      restartPolicy: Always
 `)
 	SystemNSTemplate = []byte(`apiVersion: v1
 kind: Namespace

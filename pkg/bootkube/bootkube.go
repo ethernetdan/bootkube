@@ -1,18 +1,10 @@
 package bootkube
 
 import (
-	"crypto/tls"
 	"fmt"
-	"net"
-	"net/http"
-	"net/url"
 	"path/filepath"
 	"time"
 
-	etcd "github.com/coreos/etcd/etcdserver"
-	etcdhttp "github.com/coreos/etcd/etcdserver/api/v2http"
-	etcdtransport "github.com/coreos/etcd/pkg/transport"
-	etcdtypes "github.com/coreos/etcd/pkg/types"
 	"github.com/spf13/pflag"
 	apiapp "k8s.io/kubernetes/cmd/kube-apiserver/app"
 	apiserver "k8s.io/kubernetes/cmd/kube-apiserver/app/options"
@@ -22,6 +14,7 @@ import (
 	scheduler "k8s.io/kubernetes/plugin/cmd/kube-scheduler/app/options"
 
 	"github.com/kubernetes-incubator/bootkube/pkg/asset"
+	"github.com/kubernetes-incubator/bootkube/pkg/etcd"
 )
 
 const (
@@ -35,6 +28,15 @@ const (
 	// and doesn't end up in a race with bootkube for the insecure port. When bootkube dies, the self-hosted
 	// api-server is using the correct standard ports (443/8080).
 	insecureAPIAddr = "http://127.0.0.1:8081"
+
+	// etcdMembers is the number of etcd servers in a cluster. This number must be >=2 or new members can't be added.
+	etcdMembers = 2
+
+	// etcdClusterToken is the token etcd uses to bootstrap
+	etcdClusterToken = "bootkube"
+
+	// etcdHost is the host that etcd members will bind to
+	etcdHost = "127.0.0.1"
 )
 
 var requiredPods = []string{
@@ -46,16 +48,14 @@ var requiredPods = []string{
 }
 
 type Config struct {
-	AssetDir      string
-	EtcdDataDir   string
-	EtcdName      string
-	EtcdClientURL *url.URL
-	EtcdPeerURL   *url.URL
+	AssetDir    string
+	EtcdDataDir string
+	EtcdName    string
+	EtcdHost    string
 }
 
 type bootkube struct {
-	etcd       *etcd.EtcdServer
-	etcdConfig *etcd.ServerConfig
+	etcd       *etcd.Cluster
 	assetDir   string
 	apiServer  *apiserver.APIServer
 	controller *controller.CMServer
@@ -63,39 +63,17 @@ type bootkube struct {
 }
 
 func NewBootkube(config Config) (*bootkube, error) {
-	etcdClientURLs, err := etcdtypes.NewURLs([]string{config.EtcdClientURL.String()})
+	etcdCluster, err := etcd.NewCluster(etcdMembers, config.EtcdName, config.EtcdDataDir, etcdClusterToken, config.EtcdHost, 6000, 6040)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("could not create cluster: %v", err)
 	}
 
-	etcdPeerURLs, err := etcdtypes.NewURLs([]string{config.EtcdPeerURL.String()})
-	if err != nil {
-		return nil, err
-	}
-
-	peersMap := map[string]etcdtypes.URLs{
-		config.EtcdName: etcdPeerURLs,
-	}
-
-	etcdConfig := &etcd.ServerConfig{
-		Name:               config.EtcdName,
-		ClientURLs:         etcdClientURLs,
-		PeerURLs:           etcdPeerURLs,
-		DataDir:            config.EtcdDataDir,
-		InitialPeerURLsMap: peersMap,
-
-		NewCluster: true,
-
-		SnapCount:     etcd.DefaultSnapCount,
-		MaxSnapFiles:  5,
-		MaxWALFiles:   5,
-		TickMs:        100,
-		ElectionTicks: 10,
-	}
-
-	etcdServer, err := etcd.NewServer(etcdConfig)
-	if err != nil {
-		return nil, fmt.Errorf("etcd config error: %v", err)
+	clientURLs := ""
+	for pos, url := range etcdCluster.ClientURLs() {
+		if pos > 0 {
+			clientURLs += ","
+		}
+		clientURLs += url
 	}
 
 	apiServer := apiserver.NewAPIServer()
@@ -109,7 +87,7 @@ func NewBootkube(config Config) (*bootkube, error) {
 		"--tls-private-key-file=" + filepath.Join(config.AssetDir, asset.AssetPathAPIServerKey),
 		"--tls-cert-file=" + filepath.Join(config.AssetDir, asset.AssetPathAPIServerCert),
 		"--client-ca-file=" + filepath.Join(config.AssetDir, asset.AssetPathCACert),
-		"--etcd-servers=http://127.0.0.1:4500", //+ config.EtcdClientURL.String(),
+		"--etcd-servers=" + clientURLs,
 		"--service-cluster-ip-range=10.3.0.0/24",
 		"--service-account-key-file=" + filepath.Join(config.AssetDir, asset.AssetPathServiceAccountPubKey),
 		"--admission-control=ServiceAccount",
@@ -135,8 +113,7 @@ func NewBootkube(config Config) (*bootkube, error) {
 	})
 
 	return &bootkube{
-		etcdConfig: etcdConfig,
-		etcd:       etcdServer,
+		etcd:       etcdCluster,
 		apiServer:  apiServer,
 		controller: cmServer,
 		scheduler:  schedServer,
@@ -145,26 +122,16 @@ func NewBootkube(config Config) (*bootkube, error) {
 }
 
 func (b *bootkube) Run() error {
-	UserOutput("Running temporary bootstrap control plane...\n")
-
-	listeners := createListenersOrPanic(b.etcdConfig.ClientURLs)
-	b.etcd.Start()
-
-	// setup client listeners
-	timeout := etcdRequestTimeout(b.etcdConfig.ElectionTicks, b.etcdConfig.TickMs)
-	ch := etcdhttp.NewClientHandler(b.etcd, timeout)
-	for _, l := range listeners {
-		go func(l net.Listener) {
-			srv := &http.Server{
-				Handler:     ch,
-				ReadTimeout: 5 * time.Minute,
-			}
-			panic(srv.Serve(l))
-		}(l)
+	UserOutput("Starting etcd cluster...\n")
+	if err := b.etcd.Start(); err != nil {
+		return err
 	}
 
-	time.Sleep(2 * time.Second)
+	wait := 2 * time.Second
+	UserOutput("Waiting %v for etcd cluster to bootstrap...\n", wait)
+	time.Sleep(wait)
 
+	UserOutput("Running temporary bootstrap control plane...\n")
 	errch := make(chan error)
 	go func() { errch <- apiapp.Run(b.apiServer) }()
 	go func() { errch <- cmapp.Run(b.controller) }()
@@ -190,27 +157,4 @@ func (b *bootkube) Run() error {
 // should go to stderr.
 func UserOutput(format string, a ...interface{}) {
 	fmt.Printf(format, a...)
-}
-
-// createListenersOrPanic either creates a TCP listener with the provided URLs or panics.
-func createListenersOrPanic(urls etcdtypes.URLs) (listeners []net.Listener) {
-	for _, url := range urls {
-		l, err := net.Listen("tcp", url.Host)
-		if err != nil {
-			panic(err)
-		}
-
-		l, err = etcdtransport.NewKeepAliveListener(l, url.Scheme, &tls.Config{})
-		if err != nil {
-			panic(err)
-		}
-
-		listeners = append(listeners, l)
-	}
-	return listeners
-}
-
-// etcdRequestTimeout calculates the correct timeout using a method from from github.com/coreos/etcd/etcdserver/config.go
-func etcdRequestTimeout(electionTicks int, tickMs uint) time.Duration {
-	return 5*time.Second + 2*time.Duration(electionTicks)*time.Duration(tickMs)*time.Millisecond
 }
