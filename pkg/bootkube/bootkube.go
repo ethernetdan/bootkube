@@ -149,6 +149,9 @@ func (b *bootkube) Run() error {
 	if err != nil {
 		UserOutput("Error: %v\n", err)
 	}
+
+	UserOutput("Turning down bootkube etcd cluster members...")
+	b.etcd.TurnDown(time.Second * 2)
 	return err
 }
 

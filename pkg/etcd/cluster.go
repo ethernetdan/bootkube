@@ -3,6 +3,9 @@ package etcd
 import (
 	"fmt"
 	"path/filepath"
+	"time"
+
+	"golang.org/x/net/context"
 )
 
 var (
@@ -73,6 +76,16 @@ func (c *Cluster) Start() (err error) {
 func (c *Cluster) Stop() {
 	for _, server := range c.servers {
 		server.Stop()
+	}
+}
+
+// TurnDown will remove each etcd in the cluster as a member, sleeping the given time between each.
+func (c *Cluster) TurnDown(t time.Duration) {
+	for _, s := range c.servers {
+		id := s.server.ID()
+		s.server.RemoveMember(context.Background(), uint64(id))
+		time.Sleep(t)
+		s.Stop()
 	}
 }
 

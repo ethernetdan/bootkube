@@ -66,14 +66,16 @@ func NewServer(name, dataDir, clusterToken string, newCluster bool, clientURLs, 
 
 // Server is an Etcd server that is able to be started and stopped.
 type Server struct {
-	config *etcd.ServerConfig
-	server *etcd.EtcdServer
-	pLis   []net.Listener
-	cLis   []net.Listener
+	config  *etcd.ServerConfig
+	server  *etcd.EtcdServer
+	pLis    []net.Listener
+	cLis    []net.Listener
+	running bool
 }
 
 // Start creates client & peer listeners, executes the etcd goroutine, and sets up client & peer HTTP handlers.
 func (e *Server) Start() (err error) {
+	e.running = true
 	// create listeners
 	if e.pLis, err = createListeners(e.config.PeerURLs); err != nil {
 		return fmt.Errorf("failed to create peer listeners: %v", err)
@@ -92,7 +94,11 @@ func (e *Server) Start() (err error) {
 			srv := &http.Server{
 				Handler: ph,
 			}
-			panic(srv.Serve(l))
+
+			err := srv.Serve(l)
+			if e.running {
+				panic(err)
+			}
 		}(l)
 	}
 
@@ -105,7 +111,11 @@ func (e *Server) Start() (err error) {
 				Handler:     ch,
 				ReadTimeout: 5 * time.Minute,
 			}
-			panic(srv.Serve(l))
+
+			err := srv.Serve(l)
+			if e.running {
+				panic(err)
+			}
 		}(l)
 	}
 	return nil
@@ -113,6 +123,7 @@ func (e *Server) Start() (err error) {
 
 // Stop signals the etcd goroutine to exit and closes peer & client listeners.
 func (e *Server) Stop() {
+	e.running = false
 	if e.server != nil {
 		e.server.Stop()
 	}
