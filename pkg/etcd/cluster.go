@@ -15,8 +15,8 @@ var (
 
 // NewCluster creates an etcd cluster with the number of members given in size (must be 1 or greater). Members are named
 // by appending a number to namePrefix. Each member is given directory under rootDataDir named after itself. The hostname
-// used in URLs is defined by host. Each member will be assigned a peer port and a client port from the range specified
-// in beginPeer & endPeer and beginClient & endClient.
+// used in URLs is defined by host. Each member will be assigned a peer port and a client port from the range beginning
+// with beginPeer & endPeer
 func NewCluster(size int, namePrefix, rootDataDir, clusterToken, host string, beginPeer, beginClient int) (*Cluster, error) {
 	if size < 1 {
 		return nil, fmt.Errorf("cluster must have at least one member: given size %d", size)
