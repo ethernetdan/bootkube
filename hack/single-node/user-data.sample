@@ -33,7 +33,6 @@ coreos:
         ExecStartPre=/bin/mkdir -p /etc/kubernetes/checkpoint-secrets
         ExecStart=/usr/lib/coreos/kubelet-wrapper \
           --kubeconfig=/etc/kubernetes/kubeconfig \
-          --require-kubeconfig \
           --lock-file=/var/run/lock/kubelet.lock \
           --exit-on-lock-contention=true \
           --allow-privileged \
@@ -42,16 +41,13 @@ coreos:
           --node-labels=master=true \
           --minimum-container-ttl-duration=3m0s \
           --cluster_dns=10.3.0.10 \
-          --cluster_domain=cluster.local
+          --experimental-bootstrap-kubeconfig="/etc/kubernetes/bootstrap-kubeconfig" \
+          --cluster_domain=cluster.local \
+          --cert-dir="/etc/kubernetes" \
+          --v=9
 
         Restart=always
         RestartSec=5
 
         [Install]
         WantedBy=multi-user.target
-
-write_files:
-  - path: "/etc/kubernetes/kubeconfig"
-    permissions: "0644"
-    owner: core
-    content: |

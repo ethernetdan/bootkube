@@ -57,6 +57,8 @@ func NewBootkube(config Config) (*bootkube, error) {
 		"--service-account-private-key-file=" + filepath.Join(config.AssetDir, asset.AssetPathServiceAccountPrivKey),
 		"--root-ca-file=" + filepath.Join(config.AssetDir, asset.AssetPathCACert),
 		"--leader-elect=true",
+		"--cluster-signing-cert-file=/home/core/bootauth/ca.pem",
+		"--cluster-signing-key-file=/home/core/bootauth/ca-key.pem",
 	})
 
 	schedServer := scheduler.NewSchedulerServer()

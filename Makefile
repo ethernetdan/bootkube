@@ -25,7 +25,7 @@ install: _output/bin/$(LOCAL_OS)/bootkube
 
 _output/bin/%: $(GOFILES)
 	mkdir -p $(dir $@)
-	GOOS=$(word 1, $(subst /, ,$*)) go build -ldflags "$(LDFLAGS)" -o $@ github.com/kubernetes-incubator/bootkube/cmd/$(notdir $@)
+	GOOS=$(word 1, $(subst /, ,$*)) go build -i -ldflags "$(LDFLAGS)" -o $@ github.com/kubernetes-incubator/bootkube/cmd/$(notdir $@)
 
 _output/release/bootkube.tar.gz: _output/bin/linux/bootkube _output/bin/darwin/bootkube _output/bin/linux/checkpoint
 	mkdir -p $(dir $@)
