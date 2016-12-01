@@ -32,6 +32,7 @@ coreos:
         ExecStartPre=/bin/mkdir -p /srv/kubernetes/manifests
         ExecStartPre=/bin/mkdir -p /etc/kubernetes/checkpoint-secrets
         ExecStart=/usr/lib/coreos/kubelet-wrapper \
+          --require-kubeconfig=true \
           --kubeconfig=/etc/kubernetes/kubeconfig \
           --lock-file=/var/run/lock/kubelet.lock \
           --exit-on-lock-contention=true \
